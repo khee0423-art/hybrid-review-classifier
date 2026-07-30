@@ -154,3 +154,4 @@ class MLClassifier:
             raise RuntimeError(
                 "The model has not been trained or loaded."
             )
+# test
