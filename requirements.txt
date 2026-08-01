@@ -1,7 +1,9 @@
 pandas
 numpy
 scikit-learn
-openai
+datasets
+joblib
+google-genai
 python-dotenv
 jupyter
 matplotlib
