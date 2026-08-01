@@ -21,7 +21,7 @@ class LLMClassifier:
 
     def __init__(
         self,
-        model: str = "gemini-2.5-flash-lite",
+        model: str = "gemini-3.6-flash",
         api_key: str | None = None,
         cost_tracker: CostTracker | None = None,
     ) -> None:
@@ -65,12 +65,28 @@ class LLMClassifier:
                     "Return only one lowercase word: positive or negative."
                 ),
                 temperature=0,
-                max_output_tokens=10,
+                max_output_tokens=100,
+                thinking_config=types.ThinkingConfig(
+                    thinking_level="minimal"
+                ),
             ),
         )
 
         if not response.text:
-            raise ValueError("Gemini returned an empty response.")
+            finish_reason = None
+            finish_message = None
+
+            if response.candidates:
+                candidate = response.candidates[0]
+                finish_reason = candidate.finish_reason
+                finish_message = candidate.finish_message
+
+            raise ValueError(
+                "Gemini returned an empty response. "
+                f"finish_reason={finish_reason}, "
+                f"finish_message={finish_message}, "
+                f"prompt_feedback={response.prompt_feedback}"
+            )
 
         label = response.text.strip().lower()
 
