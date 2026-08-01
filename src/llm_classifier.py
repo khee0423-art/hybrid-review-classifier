@@ -4,6 +4,12 @@ import os
 
 from openai import OpenAI
 
+from cost_tracker import (
+    CostTracker,
+    ModelPricing,
+    extract_openai_usage,
+)
+
 
 class LLMClassifier:
     """
@@ -12,8 +18,9 @@ class LLMClassifier:
 
     def __init__(
         self,
-        model: str = "gpt-5.5",
+        model: str = "gpt-5",
         api_key: str | None = None,
+        cost_tracker: CostTracker | None = None,
     ) -> None:
         resolved_api_key = api_key or os.getenv("OPENAI_API_KEY")
 
@@ -25,6 +32,16 @@ class LLMClassifier:
 
         self.model = model
         self.client = OpenAI(api_key=resolved_api_key)
+
+        self.cost_tracker = cost_tracker or CostTracker(
+            pricing={
+                self.model: ModelPricing(
+                    input_per_million=0.0,   # 실제 단가로 교체
+                    output_per_million=0.0,  # 실제 단가로 교체
+                )
+            },
+            log_path="logs/llm_costs.csv",
+        )
 
     def classify(self, review: str) -> str:
         """
@@ -51,5 +68,22 @@ class LLMClassifier:
             raise ValueError(
                 f"Unexpected model response: {label}"
             )
+
+        input_tokens, output_tokens = extract_openai_usage(response)
+
+        cost_record = self.cost_tracker.record(
+            model=self.model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            request_id=response.id,
+            category="review_classification",
+        )
+
+        print(
+            f"Prediction: {label} | "
+            f"Input tokens: {input_tokens} | "
+            f"Output tokens: {output_tokens} | "
+            f"Cost: ${cost_record.total_cost_usd:.8f}"
+        )
 
         return label
