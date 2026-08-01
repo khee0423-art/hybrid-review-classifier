@@ -113,39 +113,18 @@ class HybridRouter:
             self.classify(review)
             for review in reviews
         ]
-
-    def _get_ml_prediction(
-        self,
-        review: str,
-    ) -> tuple[str, float]:
+    def _get_ml_prediction(self, review: str) -> tuple[str, float]:
         """
-        Call the ML classifier.
-
-        The ML classifier must return:
-        (label, confidence)
+        Return one ML prediction and its confidence.
         """
-        if hasattr(self.ml_classifier, "predict"):
-            result = self.ml_classifier.predict(review)
+        predictions, confidences = (
+        self.ml_classifier.predict_with_confidence([review])
+    )
 
-        elif hasattr(self.ml_classifier, "classify"):
-            result = self.ml_classifier.classify(review)
+        label = str(predictions[0])
+        confidence = float(confidences[0])
 
-        else:
-            raise AttributeError(
-                "MLClassifier must have either a predict() "
-                "or classify() method."
-            )
-
-        if not isinstance(result, tuple) or len(result) != 2:
-            raise ValueError(
-                "ML classifier must return a tuple: "
-                "(label, confidence). "
-                f"Received: {result!r}"
-            )
-
-        label, confidence = result
-
-        return str(label), float(confidence)
+        return label, confidence
 
     def get_summary(self) -> dict[str, int | float]:
         """
@@ -224,6 +203,38 @@ class HybridRouter:
 
 if __name__ == "__main__":
     ml_classifier = MLClassifier()
+
+    training_reviews = [
+        "This product is amazing.",
+        "I love this item.",
+        "Excellent quality and fast delivery.",
+        "It works perfectly.",
+        "I am very satisfied with this purchase.",
+        "This product is terrible.",
+        "I hate this item.",
+        "The quality is awful.",
+        "It stopped working immediately.",
+        "I want a refund.",
+    ]
+
+    training_labels = [
+        "positive",
+        "positive",
+        "positive",
+        "positive",
+        "positive",
+        "negative",
+        "negative",
+        "negative",
+        "negative",
+        "negative",
+    ]
+
+    ml_classifier.train(
+        training_reviews,
+        training_labels,
+    )
+
     llm_classifier = LLMClassifier()
 
     router = HybridRouter(
