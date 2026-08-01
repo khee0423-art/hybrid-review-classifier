@@ -3,14 +3,17 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from llm_classifier import LLMClassifier
+from ml_classifier import MLClassifier
+
 
 @dataclass
 class RoutingResult:
     """
-    Result returned by the hybrid review classifier.
+    Result of one hybrid classification request.
     """
 
-    label: str
+    final_label: str
     route: str
     ml_label: str
     ml_confidence: float
@@ -18,35 +21,23 @@ class RoutingResult:
     llm_called: bool
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert the routing result to a dictionary."""
         return asdict(self)
 
 
 class HybridRouter:
     """
-    Route high-confidence predictions to the ML classifier and
-    low-confidence predictions to the LLM classifier.
+    Route reviews between the ML classifier and Gemini.
 
-    Parameters
-    ----------
-    ml_classifier:
-        A classifier whose predict() method returns:
-        (label, confidence)
-
-    llm_classifier:
-        A classifier whose classify() method returns:
-        "positive" or "negative"
-
-    confidence_threshold:
-        Minimum ML confidence required to accept the ML prediction.
+    High-confidence ML predictions are accepted directly.
+    Low-confidence predictions are sent to the LLM classifier.
     """
 
     VALID_LABELS = {"positive", "negative"}
 
     def __init__(
         self,
-        ml_classifier: Any,
-        llm_classifier: Any,
+        ml_classifier: MLClassifier,
+        llm_classifier: LLMClassifier,
         confidence_threshold: float = 0.80,
     ) -> None:
         if not 0.0 <= confidence_threshold <= 1.0:
@@ -64,32 +55,30 @@ class HybridRouter:
 
     def classify(self, review: str) -> RoutingResult:
         """
-        Classify one review using the hybrid routing strategy.
+        Classify one review using ML or Gemini.
         """
         cleaned_review = review.strip()
 
         if not cleaned_review:
             raise ValueError("Review text cannot be empty.")
 
-        self.total_requests += 1
-
-        ml_label, ml_confidence = self.ml_classifier.predict(
+        ml_label, ml_confidence = self._get_ml_prediction(
             cleaned_review
         )
 
         ml_label = str(ml_label).strip().lower()
         ml_confidence = float(ml_confidence)
 
-        self._validate_ml_result(
-            label=ml_label,
-            confidence=ml_confidence,
-        )
+        self._validate_label(ml_label)
+        self._validate_confidence(ml_confidence)
+
+        self.total_requests += 1
 
         if ml_confidence >= self.confidence_threshold:
             self.ml_requests += 1
 
             return RoutingResult(
-                label=ml_label,
+                final_label=ml_label,
                 route="ml",
                 ml_label=ml_label,
                 ml_confidence=ml_confidence,
@@ -105,7 +94,7 @@ class HybridRouter:
         self.llm_requests += 1
 
         return RoutingResult(
-            label=llm_label,
+            final_label=llm_label,
             route="llm",
             ml_label=ml_label,
             ml_confidence=ml_confidence,
@@ -120,72 +109,120 @@ class HybridRouter:
         """
         Classify multiple reviews.
         """
-        if not reviews:
-            return []
+        return [
+            self.classify(review)
+            for review in reviews
+        ]
 
-        results: list[RoutingResult] = []
+    def _get_ml_prediction(
+        self,
+        review: str,
+    ) -> tuple[str, float]:
+        """
+        Call the ML classifier.
 
-        for review in reviews:
-            result = self.classify(review)
-            results.append(result)
+        The ML classifier must return:
+        (label, confidence)
+        """
+        if hasattr(self.ml_classifier, "predict"):
+            result = self.ml_classifier.predict(review)
 
-        return results
+        elif hasattr(self.ml_classifier, "classify"):
+            result = self.ml_classifier.classify(review)
+
+        else:
+            raise AttributeError(
+                "MLClassifier must have either a predict() "
+                "or classify() method."
+            )
+
+        if not isinstance(result, tuple) or len(result) != 2:
+            raise ValueError(
+                "ML classifier must return a tuple: "
+                "(label, confidence). "
+                f"Received: {result!r}"
+            )
+
+        label, confidence = result
+
+        return str(label), float(confidence)
 
     def get_summary(self) -> dict[str, int | float]:
         """
         Return routing statistics for the current session.
         """
         if self.total_requests == 0:
-            ml_rate = 0.0
-            llm_rate = 0.0
+            ml_routing_rate = 0.0
+            llm_routing_rate = 0.0
         else:
-            ml_rate = self.ml_requests / self.total_requests
-            llm_rate = self.llm_requests / self.total_requests
+            ml_routing_rate = (
+                self.ml_requests / self.total_requests
+            )
+            llm_routing_rate = (
+                self.llm_requests / self.total_requests
+            )
 
-        return {
+        summary: dict[str, int | float] = {
             "total_requests": self.total_requests,
             "ml_requests": self.ml_requests,
             "llm_requests": self.llm_requests,
-            "ml_routing_rate": ml_rate,
-            "llm_routing_rate": llm_rate,
+            "ml_routing_rate": ml_routing_rate,
+            "llm_routing_rate": llm_routing_rate,
             "confidence_threshold": self.confidence_threshold,
         }
 
+        cost_tracker = getattr(
+            self.llm_classifier,
+            "cost_tracker",
+            None,
+        )
+
+        if cost_tracker is not None:
+            cost_summary = cost_tracker.get_summary()
+
+            summary["llm_total_cost_usd"] = float(
+                cost_summary["total_cost_usd"]
+            )
+            summary["llm_total_tokens"] = int(
+                cost_summary["total_tokens"]
+            )
+
+        return summary
+
     def reset_summary(self) -> None:
         """
-        Reset routing statistics.
+        Reset routing counts and LLM cost-session totals.
         """
         self.total_requests = 0
         self.ml_requests = 0
         self.llm_requests = 0
 
-    def _validate_ml_result(
-        self,
-        label: str,
-        confidence: float,
-    ) -> None:
-        """Validate the ML classifier output."""
-        self._validate_label(label)
+        cost_tracker = getattr(
+            self.llm_classifier,
+            "cost_tracker",
+            None,
+        )
 
+        if cost_tracker is not None:
+            cost_tracker.reset_session()
+
+    def _validate_label(self, label: str) -> None:
+        if label not in self.VALID_LABELS:
+            raise ValueError(
+                "Label must be positive or negative. "
+                f"Received: {label}"
+            )
+
+    @staticmethod
+    def _validate_confidence(confidence: float) -> None:
         if not 0.0 <= confidence <= 1.0:
             raise ValueError(
                 "ML confidence must be between 0 and 1. "
                 f"Received: {confidence}"
             )
 
-    def _validate_label(self, label: str) -> None:
-        """Validate a sentiment label."""
-        if label not in self.VALID_LABELS:
-            raise ValueError(
-                "Classifier output must be positive or negative. "
-                f"Received: {label}"
-            )
-
 
 if __name__ == "__main__":
-    from llm_classifier import LLMClassifier
-    from ml_classifier import MLClassifier
-
     ml_classifier = MLClassifier()
     llm_classifier = LLMClassifier()
 
@@ -197,20 +234,22 @@ if __name__ == "__main__":
 
     sample_reviews = [
         "This product is absolutely amazing.",
-        "It was okay, but I am not sure whether I liked it.",
-        "The quality was terrible and I want a refund.",
+        "It is not bad, but I am not sure whether I like it.",
+        "The quality is terrible and I want a refund.",
     ]
 
     for sample_review in sample_reviews:
-        routing_result = router.classify(sample_review)
+        result = router.classify(sample_review)
 
         print("\nReview:", sample_review)
-        print("Final label:", routing_result.label)
-        print("Route:", routing_result.route)
+        print("Final label:", result.final_label)
+        print("Route:", result.route)
+        print("ML label:", result.ml_label)
         print(
             "ML confidence:",
-            f"{routing_result.ml_confidence:.4f}",
+            f"{result.ml_confidence:.4f}",
         )
+        print("LLM called:", result.llm_called)
 
     print("\nRouting summary")
     print(router.get_summary())
