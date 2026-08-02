@@ -1,65 +1,40 @@
 from pathlib import Path
-import sys
 
 import pandas as pd
-from sklearn.metrics import accuracy_score, classification_report
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SRC_DIR = PROJECT_ROOT / "src"
-
-sys.path.insert(0, str(SRC_DIR))
-
-from ml_classifier import MLClassifier
-
+from datasets import load_dataset
 
 def main() -> None:
-    train_path = PROJECT_ROOT / "data" / "imdb_train.csv"
-    test_path = PROJECT_ROOT / "data" / "imdb_test.csv"
-    model_path = PROJECT_ROOT / "models" / "ml_classifier.joblib"
+    output_dir = Path("data")
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    if not train_path.exists():
-        raise FileNotFoundError(
-            f"Training data not found: {train_path}\n"
-            "Run: python scripts/download_imdb.py"
-        )
+    dataset = load_dataset("stanfordnlp/imdb")
+   
+    train_df = pd.DataFrame(dataset["train"])
+    test_df = pd.DataFrame(dataset["test"])
+    label_mapping = {
+        0: "negative",
+        1: "positive",
+    }
 
-    train_df = pd.read_csv(train_path)
-    test_df = pd.read_csv(test_path)
+    train_df["label"] = train_df["label"].map(label_mapping)
+    test_df["label"] = test_df["label"].map(label_mapping)
 
-    train_df = train_df.dropna(subset=["text", "label"])
-    test_df = test_df.dropna(subset=["text", "label"])
+    train_df = train_df[["text", "label"]]
+    test_df = test_df[["text", "label"]]
 
-    classifier = MLClassifier()
-
-    print("Training ML classifier...")
-
-    classifier.train(
-        texts=train_df["text"],
-        labels=train_df["label"],
+    train_df.to_csv(
+        output_dir / "imdb_train.csv",
+        index=False,
     )
 
-    print("Evaluating model...")
-
-    predictions = classifier.predict(test_df["text"])
-
-    accuracy = accuracy_score(
-        test_df["label"],
-        predictions,
+    test_df.to_csv(
+        output_dir / "imdb_test.csv",
+        index=False,
     )
+    print("Train:", train_df.shape)
+    print("Test :", test_df.shape)
 
-    print(f"\nAccuracy: {accuracy:.4f}")
-    print("\nClassification report")
-    print(
-        classification_report(
-            test_df["label"],
-            predictions,
-        )
-    )
-
-    classifier.save(model_path)
-
-    print(f"\nModel saved to: {model_path}")
-
+    print(train_df.head())
 
 if __name__ == "__main__":
     main()
